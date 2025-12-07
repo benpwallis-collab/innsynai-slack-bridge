@@ -7,6 +7,8 @@ import registerEvents from "./events.js";
 import registerFeedback from "./feedback.js";
 
 export async function buildSlackApp() {
+  console.log("📦 Building Slack App...");
+
   const receiver = new ExpressReceiver({
     signingSecret: process.env.SLACK_SIGNING_SECRET
   });
@@ -16,7 +18,12 @@ export async function buildSlackApp() {
 
   const app = new App({
     token: process.env.SLACK_BOT_TOKEN,
-    receiver
+    receiver,
+    logLevel: "debug"   // FULL LOGGING
+  });
+
+  app.error((error) => {
+    console.error("🔥 Global Slack App Error:", error);
   });
 
   registerCommands(app);

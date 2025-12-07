@@ -2,6 +2,8 @@ import fetch from "node-fetch";
 import { WebClient } from "@slack/web-api";
 
 export async function getTenantAndSlackClient({ teamId }) {
+  console.log("🔍 Tenant lookup for:", teamId);
+
   const res = await fetch(process.env.SLACK_TENANT_LOOKUP_URL, {
     method: "POST",
     headers: {
@@ -12,13 +14,9 @@ export async function getTenantAndSlackClient({ teamId }) {
     body: JSON.stringify({ slack_team_id: teamId })
   });
 
-  if (!res.ok) {
-    console.error("Tenant lookup failed:", await res.text());
-    throw new Error("Tenant lookup failed");
-  }
+  const data = await res.json();
+  console.log("🏢 Tenant lookup response:", data);
 
-  const { tenant_id, slack_bot_token } = await res.json();
-  const token = slack_bot_token || process.env.SLACK_BOT_TOKEN;
-
-  return { tenant_id, slackClient: new WebClient(token) };
+  const token = data.slack_bot_token || process.env.SLACK_BOT_TOKEN;
+  return { tenant_id: data.tenant_id, slackClient: new WebClient(token) };
 }

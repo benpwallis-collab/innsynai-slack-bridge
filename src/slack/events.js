@@ -60,7 +60,6 @@ export default function registerEvents(app) {
 
       console.log("🎯 Intervention parsed:", intervention);
 
-      // If the intervention says to respond
       if (!intervention.should_respond || !intervention.reply_text) {
         console.log("ℹ️ No intervention needed.");
         return;
@@ -69,13 +68,69 @@ export default function registerEvents(app) {
       const replyText = intervention.reply_text;
       const channel = message.channel;
 
+      // Normalize respond_mode
+      const respondMode = (intervention.respond_mode || "")
+        .toLowerCase()
+        .trim();
+
+      // -------------------------------
+      // EPHEMERAL RESPONSE
+      // -------------------------------
+      if (respondMode === "ephemeral") {
+        console.log("🔎 Attempting ephemeral intervention…");
+
+        try {
+          const ephem = await slackClient.chat.postEphemeral({
+            channel,
+            user: message.user,
+            text: replyText
+          });
+
+          console.log("🟢 Ephemeral success:", ephem);
+          return;
+        } catch (err) {
+          console.error("❌ Ephemeral FAILED:", err.data || err);
+          console.log("⚠️ Falling back to thread reply.");
+        }
+
+        // Fallback to thread reply
+        await slackClient.chat.postMessage({
+          channel,
+          text: replyText,
+          thread_ts: message.thread_ts || message.ts
+        });
+
+        console.log("🟢 Fallback thread reply sent.");
+        return;
+      }
+
+      // -------------------------------
+      // THREAD REPLY MODE
+      // -------------------------------
+      if (respondMode === "thread_reply") {
+        console.log("💬 Sending thread-reply intervention…");
+
+        await slackClient.chat.postMessage({
+          channel,
+          text: replyText,
+          thread_ts: message.thread_ts || message.ts
+        });
+
+        console.log("🟢 Thread reply sent.");
+        return;
+      }
+
+      // -------------------------------
+      // CHANNEL MESSAGE MODE (default)
+      // -------------------------------
+      console.log("📣 Sending channel intervention…");
+
       await slackClient.chat.postMessage({
         channel,
-        text: replyText,
-        thread_ts: message.thread_ts || message.ts
+        text: replyText
       });
 
-      console.log("🟢 Intervention response sent.");
+      console.log("🟢 Channel message sent.");
 
     } catch (err) {
       console.error("❌ Message handler error:", err);

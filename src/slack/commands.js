@@ -3,10 +3,14 @@ import { getTenantAndSlackClient } from "../tenant/lookup.js";
 import { formatAnswerBlocks } from "../helpers/formatting.js";
 
 export default function registerCommands(app) {
+  console.log("📘 Commands registered");
+
   app.command("/ask", async ({ command, ack, respond, context, body }) => {
+    console.log("➡️ /ask received:", command.text);
     await ack();
 
     const teamId = resolveTeamId({ command, context, body });
+
     if (!teamId) {
       await respond("❌ Could not determine workspace.");
       return;
@@ -30,18 +34,20 @@ export default function registerCommands(app) {
         })
       });
 
-      if (!ragRes.ok) {
-        console.error("RAG error:", await ragRes.text());
-        await respond("❌ Something went wrong retrieving the answer.");
-        return;
-      }
-
       const data = await ragRes.json();
 
+      console.log("⬅️ /ask responding with:", data.answer);
+
       await respond({
-        blocks: formatAnswerBlocks(command.text, data.answer, data.sources, data.qa_log_id),
+        blocks: formatAnswerBlocks(
+          command.text,
+          data.answer,
+          data.sources,
+          data.qa_log_id
+        ),
         text: data.answer
       });
+
     } catch (err) {
       console.error("❌ /ask error:", err);
       await respond("❌ Something went wrong.");

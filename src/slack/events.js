@@ -7,7 +7,11 @@ export default function registerEvents(app) {
 
   app.message(async ({ message, context, body }) => {
     try {
+      // --------------------------------------------------
+      // Guard rails
+      // --------------------------------------------------
       if (!message || message.bot_id || message.subtype) return;
+      if (!message.text) return;
 
       const teamId = resolveTeamId({ message, context, body });
       if (!teamId) return;
@@ -15,70 +19,78 @@ export default function registerEvents(app) {
       const { tenant_id, slackClient } = await getTenantAndSlackClient({ teamId });
 
       // --------------------------------------------------
-      // 1. Existing: Insights ingestion
+      // 1. Existing: Insights ingestion (unchanged)
       // --------------------------------------------------
       processInsightsSignal(message, tenant_id);
 
       // --------------------------------------------------
-      // 2. NEW: Human Answer Capture (fire-and-forget)
+      // 2. NEW: Human Answer Capture (STRICT fire-and-forget)
       // --------------------------------------------------
-      try {
-        if (message.text) {
+      (() => {
+        try {
           const threadTs = message.thread_ts || message.ts;
 
-          let threadMessages = [];
-
-          try {
-            const replies = await slackClient.conversations.replies({
-              channel: message.channel,
-              ts: threadTs,
-              limit: 15
-            });
-
-            threadMessages = (replies.messages || []).map(m => ({
-              user_id: m.user,
-              text: m.text,
-              timestamp: m.ts,
-              is_bot: !!m.bot_id
-            }));
-          } catch {
-            // Fallback: single message only
-            threadMessages = [{
+          // Default: single-message fallback
+          let threadMessages = [
+            {
               user_id: message.user,
               text: message.text,
               timestamp: message.ts,
               is_bot: false
-            }];
-          }
-
-          // IMPORTANT:
-          // - No feature checks here
-          // - No service role usage
-          // - Edge function performs ALL gating
-          fetch(
-            `${process.env.SUPABASE_URL}/functions/v1/capture-human-answers`,
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                apikey: process.env.SUPABASE_ANON_KEY
-              },
-              body: JSON.stringify({
-                tenant_id,
-                source_type: "slack",
-                slack_team_id: teamId,
-                thread_messages: threadMessages,
-                source_reference: {
-                  channel_id: message.channel,
-                  thread_ts: threadTs
-                }
-              })
             }
-          );
+          ];
+
+          // Attempt to expand to full thread (best-effort only)
+          slackClient.conversations
+            .replies({
+              channel: message.channel,
+              ts: threadTs,
+              limit: 15
+            })
+            .then(res => {
+              if (Array.isArray(res?.messages) && res.messages.length) {
+                threadMessages = res.messages
+                  .filter(m => m?.text)
+                  .map(m => ({
+                    user_id: m.user,
+                    text: m.text,
+                    timestamp: m.ts,
+                    is_bot: Boolean(m.bot_id)
+                  }));
+              }
+            })
+            .catch(() => {
+              // Ignore — fallback already set
+            })
+            .finally(() => {
+              // Fire-and-forget POST to Supabase Edge Function
+              fetch(
+                `${process.env.SUPABASE_URL}/functions/v1/capture-human-answers`,
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    apikey: process.env.SUPABASE_ANON_KEY
+                  },
+                  body: JSON.stringify({
+                    tenant_id,
+                    source_type: "slack",
+                    slack_team_id: teamId,
+                    thread_messages: threadMessages,
+                    source_reference: {
+                      channel_id: message.channel,
+                      thread_ts: threadTs
+                    }
+                  })
+                }
+              ).catch(() => {
+                // Absolute silence: capture must never affect Slack
+              });
+            });
+        } catch {
+          // Absolute no-op
         }
-      } catch {
-        // Absolute no-op: capture must never affect message handling
-      }
+      })();
 
       // --------------------------------------------------
       // 3. Existing: Slack interventions (separate feature)
@@ -129,7 +141,7 @@ export default function registerEvents(app) {
           });
           return;
         } catch {
-          // fallback
+          // fall through
         }
       }
 

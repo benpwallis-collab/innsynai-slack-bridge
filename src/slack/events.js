@@ -9,20 +9,80 @@ export default function registerEvents(app) {
     try {
       if (!message || message.bot_id || message.subtype) return;
 
-      console.log("💬 Incoming message:", message.text);
-
       const teamId = resolveTeamId({ message, context, body });
       if (!teamId) return;
 
       const { tenant_id, slackClient } = await getTenantAndSlackClient({ teamId });
-      console.log("🏢 Tenant resolved:", tenant_id);
 
-      // 1. Fire insights
-      console.log("🔬 Trigger insights...");
+      // --------------------------------------------------
+      // 1. Existing: Insights ingestion
+      // --------------------------------------------------
       processInsightsSignal(message, tenant_id);
 
-      // 2. Call intervention function
-      console.log("🎯 Calling slack-intervention...");
+      // --------------------------------------------------
+      // 2. NEW: Human Answer Capture (fire-and-forget)
+      // --------------------------------------------------
+      try {
+        if (message.text) {
+          const threadTs = message.thread_ts || message.ts;
+
+          let threadMessages = [];
+
+          try {
+            const replies = await slackClient.conversations.replies({
+              channel: message.channel,
+              ts: threadTs,
+              limit: 15
+            });
+
+            threadMessages = (replies.messages || []).map(m => ({
+              user_id: m.user,
+              text: m.text,
+              timestamp: m.ts,
+              is_bot: !!m.bot_id
+            }));
+          } catch {
+            // Fallback: single message only
+            threadMessages = [{
+              user_id: message.user,
+              text: message.text,
+              timestamp: message.ts,
+              is_bot: false
+            }];
+          }
+
+          // IMPORTANT:
+          // - No feature checks here
+          // - No service role usage
+          // - Edge function performs ALL gating
+          fetch(
+            `${process.env.SUPABASE_URL}/functions/v1/capture-human-answers`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                apikey: process.env.SUPABASE_ANON_KEY
+              },
+              body: JSON.stringify({
+                tenant_id,
+                source_type: "slack",
+                slack_team_id: teamId,
+                thread_messages: threadMessages,
+                source_reference: {
+                  channel_id: message.channel,
+                  thread_ts: threadTs
+                }
+              })
+            }
+          );
+        }
+      } catch {
+        // Absolute no-op: capture must never affect message handling
+      }
+
+      // --------------------------------------------------
+      // 3. Existing: Slack interventions (separate feature)
+      // --------------------------------------------------
       const interventionRes = await fetch(
         `${process.env.SUPABASE_URL}/functions/v1/slack-intervention`,
         {
@@ -46,91 +106,46 @@ export default function registerEvents(app) {
         }
       );
 
-      console.log(`🎯 Intervention HTTP Status: ${interventionRes.status}`);
       const raw = await interventionRes.text();
-      console.log(`🎯 Intervention Raw Response: ${raw}`);
-
       let intervention;
       try {
         intervention = JSON.parse(raw);
       } catch {
-        console.error("❌ Failed to parse intervention JSON");
         return;
       }
 
-      console.log("🎯 Intervention parsed:", intervention);
-
-      if (!intervention.should_respond || !intervention.reply_text) {
-        console.log("ℹ️ No intervention needed.");
-        return;
-      }
+      if (!intervention.should_respond || !intervention.reply_text) return;
 
       const replyText = intervention.reply_text;
       const channel = message.channel;
+      const respondMode = (intervention.respond_mode || "").toLowerCase().trim();
 
-      // Normalize respond_mode
-      const respondMode = (intervention.respond_mode || "")
-        .toLowerCase()
-        .trim();
-
-      // -------------------------------
-      // EPHEMERAL RESPONSE
-      // -------------------------------
       if (respondMode === "ephemeral") {
-        console.log("🔎 Attempting ephemeral intervention…");
-
         try {
-          const ephem = await slackClient.chat.postEphemeral({
+          await slackClient.chat.postEphemeral({
             channel,
             user: message.user,
             text: replyText
           });
-
-          console.log("🟢 Ephemeral success:", ephem);
           return;
-        } catch (err) {
-          console.error("❌ Ephemeral FAILED:", err.data || err);
-          console.log("⚠️ Falling back to thread reply.");
+        } catch {
+          // fallback
         }
-
-        // Fallback to thread reply
-        await slackClient.chat.postMessage({
-          channel,
-          text: replyText,
-          thread_ts: message.thread_ts || message.ts
-        });
-
-        console.log("🟢 Fallback thread reply sent.");
-        return;
       }
 
-      // -------------------------------
-      // THREAD REPLY MODE
-      // -------------------------------
       if (respondMode === "thread_reply") {
-        console.log("💬 Sending thread-reply intervention…");
-
         await slackClient.chat.postMessage({
           channel,
           text: replyText,
           thread_ts: message.thread_ts || message.ts
         });
-
-        console.log("🟢 Thread reply sent.");
         return;
       }
-
-      // -------------------------------
-      // CHANNEL MESSAGE MODE (default)
-      // -------------------------------
-      console.log("📣 Sending channel intervention…");
 
       await slackClient.chat.postMessage({
         channel,
         text: replyText
       });
-
-      console.log("🟢 Channel message sent.");
 
     } catch (err) {
       console.error("❌ Message handler error:", err);

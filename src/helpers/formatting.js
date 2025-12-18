@@ -1,5 +1,20 @@
 import { getRelativeDate } from "./date.js";
 
+// Helper: platform label formatter
+function getPlatformLabel(source) {
+  const labels = {
+    notion: 'Notion',
+    confluence: 'Confluence',
+    gitlab: 'GitLab',
+    google_drive: 'Google Drive',
+    sharepoint: 'SharePoint',
+    manual: 'Manual Upload',
+    slack: 'Slack',
+    teams: 'Teams',
+  };
+  return labels[source] || source || 'Unknown';
+}
+
 export function formatAnswerBlocks(question, answer, sources, qaLogId) {
   const blocks = [
     {
@@ -15,12 +30,13 @@ export function formatAnswerBlocks(question, answer, sources, qaLogId) {
         type: "mrkdwn",
         text: "*Sources:*\n" +
           sources
-            .map(
-              (s) =>
-                `• ${s.url ? `<${s.url}|${s.title}>` : s.title} (Updated ${getRelativeDate(
-                  s.updated_at
-                )})`
-            )
+            .map((s) => {
+              const platform = getPlatformLabel(s.source);
+              const updated = getRelativeDate(s.updated_at);
+              return s.url 
+                ? `• <${s.url}|${s.title}> — ${platform} (Updated ${updated})`
+                : `• ${s.title} — ${platform} (Updated ${updated})`;
+            })
             .join("\n")
       }
     });

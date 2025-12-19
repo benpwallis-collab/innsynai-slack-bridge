@@ -16,7 +16,7 @@ export default function registerCommands(app) {
       return;
     }
 
-    await respond("⚙️ Working on it...");
+ //   await respond("⚙️ Working on it...");
 
     try {
       const { tenant_id } = await getTenantAndSlackClient({ teamId });

@@ -19,18 +19,17 @@ export default function registerEvents(app) {
       const { tenant_id, slackClient } = await getTenantAndSlackClient({ teamId });
 
       // --------------------------------------------------
-      // 1. Existing: Insights ingestion (unchanged)
+      // 1. Insights ingestion (unchanged)
       // --------------------------------------------------
       processInsightsSignal(message, tenant_id);
 
       // --------------------------------------------------
-      // 2. NEW: Human Answer Capture (STRICT fire-and-forget)
+      // 2. Human Answer Capture (fire-and-forget)
       // --------------------------------------------------
       (() => {
         try {
           const threadTs = message.thread_ts || message.ts;
 
-          // Default: single-message fallback
           let threadMessages = [
             {
               user_id: message.user,
@@ -40,7 +39,6 @@ export default function registerEvents(app) {
             }
           ];
 
-          // Attempt to expand to full thread (best-effort only)
           slackClient.conversations
             .replies({
               channel: message.channel,
@@ -59,11 +57,8 @@ export default function registerEvents(app) {
                   }));
               }
             })
-            .catch(() => {
-              // Ignore — fallback already set
-            })
+            .catch(() => {})
             .finally(() => {
-              // Fire-and-forget POST to Supabase Edge Function
               fetch(
                 `${process.env.SUPABASE_URL}/functions/v1/capture-human-answers`,
                 {
@@ -83,90 +78,102 @@ export default function registerEvents(app) {
                     }
                   })
                 }
-              ).catch(() => {
-                // Absolute silence: capture must never affect Slack
-              });
+              ).catch(() => {});
             });
-        } catch {
-          // Absolute no-op
-        }
+        } catch {}
       })();
 
       // --------------------------------------------------
-      // 3. Existing: Slack interventions (separate feature)
+      // 3. Slack Interventions
       // --------------------------------------------------
-     const interventionRes = await fetch(
-  `${process.env.SUPABASE_URL}/functions/v1/slack-intervention`,
-  {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: process.env.SUPABASE_ANON_KEY,
-      "x-tenant-id": tenant_id
-    },
-    body: JSON.stringify({
-      tenant_id,
-      slack_team_id: teamId,
-      message_text: message.text,
-      metadata: {
-        channel_id: message.channel,
-        thread_ts: message.thread_ts,
-        user_id: message.user,
-        message_ts: message.ts
+      const interventionRes = await fetch(
+        `${process.env.SUPABASE_URL}/functions/v1/slack-intervention`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: process.env.SUPABASE_ANON_KEY,
+            "x-tenant-id": tenant_id
+          },
+          body: JSON.stringify({
+            tenant_id,
+            slack_team_id: teamId,
+            message_text: message.text,
+            metadata: {
+              channel_id: message.channel,
+              thread_ts: message.thread_ts,
+              user_id: message.user,
+              message_ts: message.ts
+            }
+          })
+        }
+      );
+
+      const raw = await interventionRes.text();
+      let intervention;
+      try {
+        intervention = JSON.parse(raw);
+      } catch {
+        return;
       }
-    })
-  }
-);
 
-const raw = await interventionRes.text();
-let intervention;
-try {
-  intervention = JSON.parse(raw);
-} catch {
-  return;
-}
+      if (!intervention.should_respond || !intervention.reply_text) return;
 
-if (!intervention.should_respond || !intervention.reply_text) return;
+      // --------------------------------------------------
+      // SAFE source rendering (deployment-safe)
+      // --------------------------------------------------
+      let sourcesText = "";
 
-// Build sources text from intervention response
-let sourcesText = "";
-if (intervention.sources && intervention.sources.length > 0) {
-  const sourcesList = intervention.sources.map((s) => {
-    return s.url ? `• <${s.url}|${s.title}>` : `• ${s.title}`;
+      if (Array.isArray(intervention.sources) && intervention.sources.length > 0) {
+        const sourcesList = intervention.sources
+          .map((s) => {
+            if (!s) return null;
+            if (typeof s === "string") return `• ${s}`;
+            if (s.title && s.url) return `• ${s.title} (${s.url})`;
+            if (s.title) return `• ${s.title}`;
+            return null;
+          })
+          .filter(Boolean);
+
+        if (sourcesList.length > 0) {
+          sourcesText = `\n\nSources:\n${sourcesList.join("\n")}`;
+        }
+      }
+
+      const fullText = `${intervention.reply_text}${sourcesText}`;
+
+      const channel = message.channel;
+      const respondMode =
+        typeof intervention.respond_mode === "string"
+          ? intervention.respond_mode.toLowerCase().trim()
+          : "";
+
+      if (respondMode === "ephemeral") {
+        try {
+          await slackClient.chat.postEphemeral({
+            channel,
+            user: message.user,
+            text: fullText
+          });
+          return;
+        } catch {}
+      }
+
+      if (respondMode === "thread_reply") {
+        await slackClient.chat.postMessage({
+          channel,
+          text: fullText,
+          thread_ts: message.thread_ts || message.ts
+        });
+        return;
+      }
+
+      await slackClient.chat.postMessage({
+        channel,
+        text: fullText
+      });
+    } catch (err) {
+      console.error("❌ Message handler error:", err);
+    }
   });
-  sourcesText = `\n\n*Sources:*\n${sourcesList.join("\n")}`;
 }
-
-// Combine reply text with sources
-const fullText = `${intervention.reply_text}${sourcesText}`;
-
-const channel = message.channel;
-const respondMode = (intervention.respond_mode || "").toLowerCase().trim();
-
-if (respondMode === "ephemeral") {
-  try {
-    await slackClient.chat.postEphemeral({
-      channel,
-      user: message.user,
-      text: fullText  // ✅ Now includes sources
-    });
-    return;
-  } catch {
-    // fall through
-  }
-}
-
-if (respondMode === "thread_reply") {
-  await slackClient.chat.postMessage({
-    channel,
-    text: fullText,  // ✅ Now includes sources
-    thread_ts: message.thread_ts || message.ts
-  });
-  return;
-}
-
-await slackClient.chat.postMessage({
-  channel,
-  text: fullText  // ✅ Now includes sources
-});
-

@@ -1,6 +1,7 @@
 import { resolveTeamId } from "../tenant/resolve.js";
 import { getTenantAndSlackClient } from "../tenant/lookup.js";
 import { processInsightsSignal } from "../insights/ingest.js";
+import { formatAnswerBlocks } from "../helpers/formatting.js";
 
 export default function registerEvents(app) {
   console.log("📡 Events registered");
@@ -45,11 +46,11 @@ export default function registerEvents(app) {
               ts: threadTs,
               limit: 15
             })
-            .then(res => {
+            .then((res) => {
               if (Array.isArray(res?.messages) && res.messages.length) {
                 threadMessages = res.messages
-                  .filter(m => m?.text)
-                  .map(m => ({
+                  .filter((m) => m?.text)
+                  .map((m) => ({
                     user_id: m.user,
                     text: m.text,
                     timestamp: m.ts,
@@ -59,32 +60,80 @@ export default function registerEvents(app) {
             })
             .catch(() => {})
             .finally(() => {
-              fetch(
-                `${process.env.SUPABASE_URL}/functions/v1/capture-human-answers`,
-                {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    apikey: process.env.SUPABASE_ANON_KEY
-                  },
-                  body: JSON.stringify({
-                    tenant_id,
-                    source_type: "slack",
-                    slack_team_id: teamId,
-                    thread_messages: threadMessages,
-                    source_reference: {
-                      channel_id: message.channel,
-                      thread_ts: threadTs
-                    }
-                  })
-                }
-              ).catch(() => {});
+              fetch(`${process.env.SUPABASE_URL}/functions/v1/capture-human-answers`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  apikey: process.env.SUPABASE_ANON_KEY
+                },
+                body: JSON.stringify({
+                  tenant_id,
+                  source_type: "slack",
+                  slack_team_id: teamId,
+                  thread_messages: threadMessages,
+                  source_reference: {
+                    channel_id: message.channel,
+                    thread_ts: threadTs
+                  }
+                })
+              }).catch(() => {});
             });
         } catch {}
       })();
 
       // --------------------------------------------------
-      // 3. Slack Interventions
+      // 3. Generic @InnsynAI mention handling (RAG Query)
+      //    - Only runs when bot is mentioned.
+      //    - Uses same blocks formatting as /ask.
+      // --------------------------------------------------
+      const botUserId = context?.botUserId || process.env.SLACK_BOT_USER_ID;
+      const isBotMention =
+        typeof botUserId === "string" && botUserId.length > 0
+          ? message.text.includes(`<@${botUserId}>`)
+          : false;
+
+      if (isBotMention) {
+        const question = message.text
+          .replace(new RegExp(`<@${botUserId}>`, "g"), "")
+          .trim();
+
+        if (question.length > 0) {
+          const ragRes = await fetch(process.env.RAG_QUERY_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              apikey: process.env.SUPABASE_ANON_KEY,
+              "x-tenant-id": tenant_id
+            },
+            body: JSON.stringify({
+              question,
+              source: "slack"
+            })
+          });
+
+          const data = await ragRes.json();
+
+          const blocks = formatAnswerBlocks(
+            question,
+            data?.answer || "I couldn’t generate an answer.",
+            data?.sources || [],
+            data?.qa_log_id
+          );
+
+          // Default: reply in thread to keep channel clean
+          await slackClient.chat.postMessage({
+            channel: message.channel,
+            thread_ts: message.thread_ts || message.ts,
+            text: data?.answer || "I couldn’t generate an answer.",
+            blocks
+          });
+
+          return;
+        }
+      }
+
+      // --------------------------------------------------
+      // 4. Slack Interventions (blocks + header + sources)
       // --------------------------------------------------
       const interventionRes = await fetch(
         `${process.env.SUPABASE_URL}/functions/v1/slack-intervention`,
@@ -117,30 +166,14 @@ export default function registerEvents(app) {
         return;
       }
 
-      if (!intervention.should_respond || !intervention.reply_text) return;
+      if (!intervention?.should_respond || !intervention?.reply_text) return;
 
-      // --------------------------------------------------
-      // SAFE source rendering (deployment-safe)
-      // --------------------------------------------------
-      let sourcesText = "";
+      const question = message.text;
+      const answer = intervention.reply_text;
+      const sources = Array.isArray(intervention.sources) ? intervention.sources : [];
+      const qaLogId = intervention.qa_log_id || intervention.qaLogId || intervention.log_id || null;
 
-      if (Array.isArray(intervention.sources) && intervention.sources.length > 0) {
-        const sourcesList = intervention.sources
-          .map((s) => {
-            if (!s) return null;
-            if (typeof s === "string") return `• ${s}`;
-            if (s.title && s.url) return `• ${s.title} (${s.url})`;
-            if (s.title) return `• ${s.title}`;
-            return null;
-          })
-          .filter(Boolean);
-
-        if (sourcesList.length > 0) {
-          sourcesText = `\n\nSources:\n${sourcesList.join("\n")}`;
-        }
-      }
-
-      const fullText = `${intervention.reply_text}${sourcesText}`;
+      const blocks = formatAnswerBlocks(question, answer, sources, qaLogId);
 
       const channel = message.channel;
       const respondMode =
@@ -153,24 +186,30 @@ export default function registerEvents(app) {
           await slackClient.chat.postEphemeral({
             channel,
             user: message.user,
-            text: fullText
+            text: answer,
+            blocks
           });
           return;
-        } catch {}
+        } catch {
+          // fall through
+        }
       }
 
       if (respondMode === "thread_reply") {
         await slackClient.chat.postMessage({
           channel,
-          text: fullText,
-          thread_ts: message.thread_ts || message.ts
+          thread_ts: message.thread_ts || message.ts,
+          text: answer,
+          blocks
         });
         return;
       }
 
+      // Default: channel message
       await slackClient.chat.postMessage({
         channel,
-        text: fullText
+        text: answer,
+        blocks
       });
     } catch (err) {
       console.error("❌ Message handler error:", err);

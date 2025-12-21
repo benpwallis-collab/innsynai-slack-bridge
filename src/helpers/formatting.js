@@ -19,7 +19,10 @@ export function formatAnswerBlocks(question, answer, sources, qaLogId) {
   const blocks = [
     {
       type: "section",
-      // text: { type: "mrkdwn", text: `💡 *Answer to:* ${question}\n\n${answer}` }
+      text: {
+        type: "mrkdwn",
+        text: answer
+      }
     }
   ];
 
@@ -28,12 +31,13 @@ export function formatAnswerBlocks(question, answer, sources, qaLogId) {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "*Sources:*\n" +
+        text:
+          "*Sources:*\n" +
           sources
             .map((s) => {
               const platform = getPlatformLabel(s.source);
               const updated = getRelativeDate(s.updated_at);
-              return s.url 
+              return s.url
                 ? `• <${s.url}|${s.title}> — ${platform} (Updated ${updated})`
                 : `• ${s.title} — ${platform} (Updated ${updated})`;
             })

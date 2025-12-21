@@ -17,11 +17,11 @@ function getPlatformLabel(source) {
 
 export function formatAnswerBlocks(question, answer, sources, qaLogId) {
   const blocks = [
-  //  {
-    //  type: "section",
+    {
+      type: "section",
       // text: { type: "mrkdwn", text: `💡 *Answer to:* ${question}\n\n${answer}` }
-   // }
-//  ];
+    }
+  ];
 
   if (sources?.length) {
     blocks.push({

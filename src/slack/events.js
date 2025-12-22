@@ -47,7 +47,7 @@ export default function registerEvents(app) {
                 {
                   type: "button",
                   text: { type: "plain_text", text: "Open Dashboard" },
-                  url: "https://app.innsynai.com"
+                  url: "https://innsynai.app"
                 }
               ]
             }

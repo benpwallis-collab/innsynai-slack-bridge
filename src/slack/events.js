@@ -5,7 +5,8 @@ import { formatAnswerBlocks } from "../helpers/formatting.js";
 
 /**
  * Registers all Slack event handlers.
- * Mentions are handled explicitly via app_mention.
+ * NOTE: Slack payload shapes differ between commands, events, and actions.
+ * This file explicitly normalizes team_id resolution per event type.
  */
 export default function registerEvents(app) {
   console.log("📡 Events registered");
@@ -59,20 +60,38 @@ export default function registerEvents(app) {
   });
 
   // --------------------------------------------------
-  // 1. Explicit @mention handler (CRITICAL)
+  // 1. Explicit @mention handler (FIXED)
   // --------------------------------------------------
-  app.event("app_mention", async ({ event, context, client }) => {
+  app.event("app_mention", async ({ event, context }) => {
     try {
       if (!event?.text || !event?.channel) return;
 
-      const teamId = resolveTeamId({ message: event, context, body: null });
-      if (!teamId) return;
+      /**
+       * Slack app_mention payloads provide team ID as:
+       *   event.team
+       * NOT body.team_id or command.team_id
+       */
+      const teamId =
+        event.team ||
+        context?.teamId ||
+        resolveTeamId({ message: event, context, body: null });
+
+      if (!teamId) {
+        console.error("❌ app_mention: unable to resolve team id", {
+          eventTeam: event.team,
+          contextTeam: context?.teamId
+        });
+        return;
+      }
 
       const { tenant_id, slackClient } =
         await getTenantAndSlackClient({ teamId });
 
       const botUserId = context?.botUserId;
-      if (!botUserId) return;
+      if (!botUserId) {
+        console.error("❌ app_mention: missing botUserId");
+        return;
+      }
 
       const question = event.text
         .replace(new RegExp(`<@${botUserId}>`, "g"), "")

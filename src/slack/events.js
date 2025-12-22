@@ -12,11 +12,23 @@ export default function registerEvents(app) {
   console.log("📡 Events registered");
 
   // --------------------------------------------------
-  // App Home
+  // App Home (FIXED: tenant-aware client)
   // --------------------------------------------------
-  app.event("app_home_opened", async ({ event, client }) => {
+  app.event("app_home_opened", async ({ event, context }) => {
     try {
-      await client.views.publish({
+      const teamId =
+        event.team_id ||
+        event.team ||
+        context?.teamId;
+
+      if (!teamId) {
+        console.error("❌ app_home_opened: missing teamId");
+        return;
+      }
+
+      const { slackClient } = await getTenantAndSlackClient({ teamId });
+
+      await slackClient.views.publish({
         user_id: event.user,
         view: {
           type: "home",
@@ -47,7 +59,7 @@ export default function registerEvents(app) {
                 {
                   type: "button",
                   text: { type: "plain_text", text: "Open Dashboard" },
-                  url: "https://innsynai.app"
+                  url: "https://innsynai.app/dashboard"
                 }
               ]
             }
@@ -60,27 +72,19 @@ export default function registerEvents(app) {
   });
 
   // --------------------------------------------------
-  // 1. Explicit @mention handler (FIXED)
+  // 1. Explicit @mention handler
   // --------------------------------------------------
   app.event("app_mention", async ({ event, context }) => {
     try {
       if (!event?.text || !event?.channel) return;
 
-      /**
-       * Slack app_mention payloads provide team ID as:
-       *   event.team
-       * NOT body.team_id or command.team_id
-       */
       const teamId =
         event.team ||
         context?.teamId ||
         resolveTeamId({ message: event, context, body: null });
 
       if (!teamId) {
-        console.error("❌ app_mention: unable to resolve team id", {
-          eventTeam: event.team,
-          contextTeam: context?.teamId
-        });
+        console.error("❌ app_mention: unable to resolve team id");
         return;
       }
 
@@ -88,10 +92,7 @@ export default function registerEvents(app) {
         await getTenantAndSlackClient({ teamId });
 
       const botUserId = context?.botUserId;
-      if (!botUserId) {
-        console.error("❌ app_mention: missing botUserId");
-        return;
-      }
+      if (!botUserId) return;
 
       const question = event.text
         .replace(new RegExp(`<@${botUserId}>`, "g"), "")
@@ -151,14 +152,10 @@ export default function registerEvents(app) {
       const { tenant_id, slackClient } =
         await getTenantAndSlackClient({ teamId });
 
-      // --------------------------------------------------
-      // Insights ingestion (fire-and-forget)
-      // --------------------------------------------------
+      // Insights ingestion
       processInsightsSignal(message, tenant_id);
 
-      // --------------------------------------------------
       // Human answer capture (fire-and-forget)
-      // --------------------------------------------------
       (() => {
         try {
           const threadTs = message.thread_ts || message.ts;
@@ -215,9 +212,7 @@ export default function registerEvents(app) {
         } catch {}
       })();
 
-      // --------------------------------------------------
       // Slack Interventions
-      // --------------------------------------------------
       const interventionRes = await fetch(
         `${process.env.SUPABASE_URL}/functions/v1/slack-intervention`,
         {

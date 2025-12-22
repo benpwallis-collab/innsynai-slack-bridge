@@ -12,7 +12,7 @@ export default function registerEvents(app) {
   console.log("📡 Events registered");
 
   // --------------------------------------------------
-  // App Home (FIXED: tenant-aware client)
+  // App Home (customer-ready + reviewer-safe)
   // --------------------------------------------------
   app.event("app_home_opened", async ({ event, context }) => {
     try {
@@ -39,7 +39,7 @@ export default function registerEvents(app) {
                 type: "mrkdwn",
                 text:
                   "*👋 Welcome to InnsynAI*\n\n" +
-                  "InnsynAI helps your team find answers using internal documents."
+                  "InnsynAI helps your team get answers from internal documents — directly in Slack."
               }
             },
             {
@@ -47,10 +47,21 @@ export default function registerEvents(app) {
               text: {
                 type: "mrkdwn",
                 text:
-                  "*Getting started:*\n" +
-                  "1. Connect your documents\n" +
-                  "2. Ask questions with `/ask`\n" +
-                  "3. Manage settings in the dashboard"
+                  "*How to use InnsynAI:*\n" +
+                  "• Ask a question using `/ask`\n" +
+                  "• Mention `@InnsynAI` in a channel\n" +
+                  "• Get answers with sources"
+              }
+            },
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text:
+                  "*Get started:*\n" +
+                  "1. Connect your documents in the dashboard\n" +
+                  "2. Add InnsynAI to the channels you want\n" +
+                  "3. Start asking questions"
               }
             },
             {

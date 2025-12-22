@@ -13,6 +13,12 @@ export default function registerEvents(app) {
       // --------------------------------------------------
       if (!message || message.bot_id || message.subtype) return;
       if (!message.text) return;
+      
+      // Ignore Events API handling in DMs and Group DMs
+// (Slash commands are handled elsewhere and still allowed)
+if (message.channel_type === "im" || message.channel_type === "mpim") {
+  return;
+}
 
       const teamId = resolveTeamId({ message, context, body });
       if (!teamId) return;

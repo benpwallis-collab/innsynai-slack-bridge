@@ -15,77 +15,81 @@ export default function registerEvents(app) {
   // App Home (customer-ready + reviewer-safe)
   // --------------------------------------------------
   app.event("app_home_opened", async ({ event, context }) => {
-    try {
-      const teamId =
-        event.team_id ||
-        event.team ||
-        context?.teamId;
+  try {
+    const teamId =
+      event.team_id ||
+      event.team ||
+      context?.teamId;
 
-      if (!teamId) {
-        console.error("❌ app_home_opened: missing teamId");
-        return;
-      }
+    if (!teamId) {
+      console.error("❌ app_home_opened: missing teamId");
+      return;
+    }
 
-      const { slackClient } = await getTenantAndSlackClient({ teamId });
+    const { slackClient } = await getTenantAndSlackClient({ teamId });
 
-      await slackClient.views.publish({
-  user_id: event.user,
-  view: {
-    type: "home",
-    blocks: [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text:
-            "*👋 Welcome to InnsynAI*\n\n" +
-            "InnsynAI helps your team get reliable answers from internal documents — directly in Slack."
-        }
-      },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text:
-            "*What InnsynAI does*\n" +
-            "• Answers questions using documents you connect\n" +
-            "• Responds only when mentioned or explicitly asked\n" +
-            "• Includes sources with every answer"
-        }
-      },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text:
-            "*How your team uses it*\n" +
-            "• `/ask What’s our PTO policy?`\n" +
-            "• `@InnsynAI How do I expense this?`\n" +
-            "• Ask in any channel where InnsynAI is invited"
-        }
-      },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text:
-            "*You’re in control*\n" +
-            "• InnsynAI only uses tools you connect\n" +
-            "• It does not monitor conversations\n" +
-            "• You choose which channels it’s added to"
-        }
-      },
-      {
-        type: "actions",
-        elements: [
+    await slackClient.views.publish({
+      user_id: event.user,
+      view: {
+        type: "home",
+        blocks: [
           {
-            type: "button",
-            text: { type: "plain_text", text: "Open Dashboard" },
-            url: "https://innsynai.app/dashboard"
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text:
+                "*👋 Welcome to InnsynAI*\n\n" +
+                "InnsynAI helps your team get reliable answers from internal documents — directly in Slack."
+            }
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text:
+                "*What InnsynAI does*\n" +
+                "• Answers questions using documents you connect\n" +
+                "• Responds only when mentioned or explicitly asked\n" +
+                "• Includes sources with every answer"
+            }
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text:
+                "*How your team uses it*\n" +
+                "• `/ask What’s our PTO policy?`\n" +
+                "• `@InnsynAI How do I expense this?`\n" +
+                "• Ask in any channel where InnsynAI is invited"
+            }
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text:
+                "*You’re in control*\n" +
+                "• InnsynAI only uses tools you connect\n" +
+                "• It does not monitor conversations\n" +
+                "• You choose which channels it’s added to"
+            }
+          },
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Open Dashboard" },
+                url: "https://innsynai.app/dashboard"
+              }
+            ]
           }
         ]
       }
-    ]
+    });
+  } catch (err) {
+    console.error("❌ Failed to publish App Home:", err);
   }
 });
 
